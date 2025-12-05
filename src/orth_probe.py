@@ -66,7 +66,7 @@ def orth_probe(step_size: int = 1):
 
         with h5py.File(h5_path, "r") as f:
             sample_keys = sorted(list(f.keys()), key=lambda x: int(x.split('_')[1]))
-            for key in tqdm(sample_keys[:5]):
+            for key in tqdm(sample_keys):
                 grp = f[key]
                 prompt = grp.attrs["prompt"]
                 response = grp.attrs["response"]
@@ -97,25 +97,11 @@ def orth_probe(step_size: int = 1):
                 
                 for t in range(len(cos_sims)):
                     sims[key][t + step_size][(start, end)] = cos_sims[t]
-                
-                # layer_deltas = {} 
-                # for i in range(1, len(layers)):
-                #     layer_deltas[i] = residuals[layers[i]] - residuals[layers[i-1]]
-
-                # for layer in layer_deltas:
-                #     deltas = layer_deltas[layer]
-                #     norms = np.linalg.norm(deltas, axis=1, keepdims=True)
-                #     normalized_deltas = deltas / (norms + 1e-9)
-                #     cos_sims = np.sum(
-                #         normalized_deltas[:-step_size] * normalized_deltas[step_size:], axis=1
-                #     )
-                #     for t in range(len(cos_sims)):
-                #         sims[key][t + step_size][(layer - 1, layer)] = cos_sims[t]
         
         results[dataset_name]["tokenized_responses"] = tokenized_responses
         results[dataset_name]["sims"] = sims
     
-    analyze_orthogonality(results, datasets,model)
+    analyze_orthogonality(results, datasets, model)
 
     return 
 
@@ -127,25 +113,8 @@ def analyze_orthogonality(
     results,
     datasets,
     model,
-    cos_threshold=0.3,
-    max_samples=5,
-):
-    """
-    Analyze orthogonality results from orth_probe_results.pkl.
-
-    Parameters
-    ----------
-    results : dict
-        The results dictionary produced by orth_probe.
-    model : HookedTransformer
-        The loaded model (for decoding tokens).
-    cos_threshold : float, optional
-        Tokens whose min |cos| across layer-pairs is below this
-        are considered 'orthogonal-ish'.
-    max_samples : int or None
-        If set, only analyze up to this many samples.
-    """
-    
+    max_samples=50,
+):    
     for dataset in datasets:
         print(f"\n===== Analyzing {dataset} =====")
         tokenized_responses = results[dataset]["tokenized_responses"]
@@ -168,7 +137,7 @@ def analyze_orthogonality(
             if token_ids.ndim == 2:
                 token_ids = token_ids[0]
 
-            # Convert token ids -> string tokens (LLaMA tokenizer)
+            # Convert token ids -> string tokens
             str_tokens = model.to_str_tokens(token_ids)
 
             # --- compute a score per token: min |cos| across layer pairs ---
@@ -189,14 +158,6 @@ def analyze_orthogonality(
                     "min_abs_cos": min_abs_cos,
                 }
 
-            # Pick out "orthogonal-ish" tokens
-            # interesting_tokens = [
-            #     t for t, score in token_scores.items() if score["min_abs_cos"] < cos_threshold
-            # ]
-            # if not interesting_tokens:
-            #     continue  # nothing interesting in this sample
-
-            # --- build highlighted response string ---
             highlighted = ""
             for i, tok in enumerate(str_tokens):
                 score_data = token_scores.get(i)
@@ -206,10 +167,6 @@ def analyze_orthogonality(
 
             print(f"\n===== Sample {sample_key} =====")
             print(highlighted)
-            print("\nOrthogonal-ish tokens (index -> min |cos|):")
-            # for t in sorted(interesting_tokens):
-            #     print(f"  token {t:3d}: {token_scores[t]['min_abs_cos']:.4f}")
-            #     print(token_scores[t])
             print("=================================")
 
             n_printed += 1
