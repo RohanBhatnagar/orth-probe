@@ -1,11 +1,8 @@
-import torch 
+import torch
 import numpy as np
-import pandas as pd
 from transformer_lens import HookedTransformer
-from datasets import load_dataset
 from tqdm import tqdm
-import gc 
-import modal 
+import modal
 from collections import defaultdict
 
 app = modal.App("orthogonality-probe")
@@ -16,14 +13,13 @@ image = (
     .pip_install_from_requirements("requirements.txt")
 )
 
-MODEL_NAME = "meta-llama/Meta-Llama-3-8B-Instruct"
-LAYERS = list(range(20, 29)) # 33 total layers 
+MODEL_NAME = "meta-llama/Meta-Llama-3-8B"
+LAYERS = list(range(0, 34))  # 33 total layers
+
 
 @app.function(
     image=image,
-    volumes={
-        '/data': modal.Volume.from_name("mats-data", create_if_missing=True)
-    },
+    volumes={"/data": modal.Volume.from_name("mats-data", create_if_missing=True)},
     secrets=[modal.Secret.from_name("huggingface-secret")],
     gpu="A100",
     timeout=60 * 60,
@@ -31,7 +27,6 @@ LAYERS = list(range(20, 29)) # 33 total layers
 def orth_probe(step_size: int = 1):
     import h5py
     import os
-    import pickle
 
     def cos_sim(a, b):
         # a: [dim], b: [dim]
@@ -47,7 +42,7 @@ def orth_probe(step_size: int = 1):
         device="cuda",
         dtype=torch.bfloat16,
     )
-        
+
     datasets = ["triviaqa", "gsm8k"]
     results = defaultdict(lambda: defaultdict(dict))
 
@@ -56,7 +51,7 @@ def orth_probe(step_size: int = 1):
         if not os.path.exists(h5_path):
             print(f"Skipping {dataset_name}, file not found.")
             continue
-            
+
         print(f"Processing {dataset_name}...")
 
         # sample --> tokenized response
@@ -65,26 +60,26 @@ def orth_probe(step_size: int = 1):
         sims = defaultdict(lambda: defaultdict(dict))
 
         with h5py.File(h5_path, "r") as f:
-            sample_keys = sorted(list(f.keys()), key=lambda x: int(x.split('_')[1]))
+            sample_keys = sorted(list(f.keys()), key=lambda x: int(x.split("_")[1]))
             for key in tqdm(sample_keys):
                 grp = f[key]
-                prompt = grp.attrs["prompt"]
+                # prompt = grp.attrs["prompt"]
                 response = grp.attrs["response"]
 
                 tokenized_response = model.to_tokens(response)
                 tokenized_responses[key] = tokenized_response
 
-                prompt_len = grp.attrs["prompt_len"]
-                
+                # prompt_len = grp.attrs["prompt_len"]
+
                 # residuals: layer --> [seq_len, dim]
                 residuals = {}
-                for name, dset in grp.items(): 
+                for name, dset in grp.items():
                     if name.startswith("layer_"):
                         layer_idx = int(name.split("_")[1])
                         residuals[layer_idx] = dset[:]
 
                 layers = sorted(residuals.keys())
-                seq_len = residuals[layers[0]].shape[0] 
+                # seq_len = residuals[layers[0]].shape[0]
 
                 start, end = min(layers), max(layers)
                 block_update = residuals[end] - residuals[start]
@@ -92,29 +87,33 @@ def orth_probe(step_size: int = 1):
                 normalized_block_update = block_update / (norms + 1e-9)
 
                 cos_sims = np.sum(
-                    normalized_block_update[:-step_size] * normalized_block_update[step_size:], axis=1
+                    normalized_block_update[:-step_size]
+                    * normalized_block_update[step_size:],
+                    axis=1,
                 )
-                
+
                 for t in range(len(cos_sims)):
                     sims[key][t + step_size][(start, end)] = cos_sims[t]
-        
+
         results[dataset_name]["tokenized_responses"] = tokenized_responses
         results[dataset_name]["sims"] = sims
-    
+
     analyze_orthogonality(results, datasets, model)
 
-    return 
+    return
+
 
 @app.local_entrypoint()
 def main(step_size: int = 1):
     orth_probe.remote(step_size)
+
 
 def analyze_orthogonality(
     results,
     datasets,
     model,
     max_samples=50,
-):    
+):
     for dataset in datasets:
         print(f"\n===== Analyzing {dataset} =====")
         tokenized_responses = results[dataset]["tokenized_responses"]
@@ -161,7 +160,7 @@ def analyze_orthogonality(
             highlighted = ""
             for i, tok in enumerate(str_tokens):
                 score_data = token_scores.get(i)
-                if score_data: 
+                if score_data:
                     color = get_heatmap_ansi(score_data["min_abs_cos"])
                     highlighted += f"{color}{tok}\033[0m"
 
@@ -171,6 +170,7 @@ def analyze_orthogonality(
 
             n_printed += 1
 
+
 def get_heatmap_ansi(cos_sim):
     """
     Maps cosine similarity to a Red background intensity.
@@ -178,9 +178,9 @@ def get_heatmap_ansi(cos_sim):
     High Cos Sim (Parallel)  -> No Background (or Black)
     """
     intensity = 1.0 - cos_sim
-    intensity = intensity ** 3 
+    intensity = intensity**3
     r = int(255 * intensity)
-    g = 0 
+    g = 0
     b = 0
     if r < 20:
         return "\033[0m"
