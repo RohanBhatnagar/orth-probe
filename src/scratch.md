@@ -48,6 +48,58 @@ $$Energy = \| \Delta r_t \|$$
 2. **Rank:** SVD on $\Delta r_t$ for **Complexity**.
 3. **History:** Reference $\{\Delta r_0, ..., \Delta r_{t-1}\}$ to compute **Innovation** and **Expansion**.
 
-### Extensions: 
-1. Group updates and amplify certain update directions to invoke a specific mode in base models. A form of steering. 
-2. 
+### Extensions:
+1. Group updates and amplify certain update directions to invoke a specific mode in base models. A form of steering.
+2.
+
+
+### Scratch:
+
+Qwen QWQ-32b Preview architecture:
+HookedTransformer(
+  (embed): Embed()
+  (hook_embed): HookPoint()
+  (blocks): ModuleList(
+    (0-63): 64 x TransformerBlock(
+      (ln1): RMSNormPre(
+        (hook_scale): HookPoint()
+        (hook_normalized): HookPoint()
+      )
+      (ln2): RMSNormPre(
+        (hook_scale): HookPoint()
+        (hook_normalized): HookPoint()
+      )
+      (attn): GroupedQueryAttention(
+        (hook_k): HookPoint()
+        (hook_q): HookPoint()
+        (hook_v): HookPoint()
+        (hook_z): HookPoint()
+        (hook_attn_scores): HookPoint()
+        (hook_pattern): HookPoint()
+        (hook_result): HookPoint()
+        (hook_rot_k): HookPoint()
+        (hook_rot_q): HookPoint()
+      )
+      (mlp): GatedMLP(
+        (hook_pre): HookPoint()
+        (hook_pre_linear): HookPoint()
+        (hook_post): HookPoint()
+      )
+      (hook_attn_in): HookPoint()
+      (hook_q_input): HookPoint()
+      (hook_k_input): HookPoint()
+      (hook_v_input): HookPoint()
+      (hook_mlp_in): HookPoint()
+      (hook_attn_out): HookPoint()
+      (hook_mlp_out): HookPoint()
+      (hook_resid_pre): HookPoint()
+      (hook_resid_mid): HookPoint()
+      (hook_resid_post): HookPoint()
+    )
+  )
+  (ln_final): RMSNormPre(
+    (hook_scale): HookPoint()
+    (hook_normalized): HookPoint()
+  )
+  (unembed): Unembed()
+)

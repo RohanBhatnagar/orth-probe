@@ -6,32 +6,44 @@ from tqdm import tqdm
 import gc
 import modal
 import hydra
-from omegaconf import DictConfig
 from config_runtime import init_cfg, cfg
+from pathlib import Path
+import sys
+import json
+
+CONFIG_DIR = str(Path(__file__).parent / "configs")
 
 app = modal.App("layer-extraction")
 image = (
     modal.Image.debian_slim()
     .apt_install("git")
     .pip_install_from_requirements("requirements.txt")
+    .add_local_dir(".", remote_path="/root")
 )
+
 
 @app.function(
     image=image,
     timeout=60 * 60 * 6,
-    gpu="A100",
+    gpu="A100-80GB",
     secrets=[modal.Secret.from_name("huggingface-secret")],
-    volumes={"/data": modal.Volume.from_name("mats-data", create_if_missing=True)},
+    volumes={"/data": modal.Volume.from_name("orth-data", create_if_missing=True)},
 )
-def extract_layers():
+def extract_residuals(cfg):
     import os
     import h5py
+    from omegaconf import OmegaConf
 
+    cfg = OmegaConf.create(cfg)
+
+    print("Loading model...")
     model = HookedTransformer.from_pretrained(
         cfg.model.name,
         device=cfg.model.device,
         dtype=cfg.model.dtype,
     )
+    print(model)
+    return
 
     datasets_to_process = {
         "triviaqa": load_dataset(
@@ -98,12 +110,30 @@ def extract_layers():
 
 
 @app.local_entrypoint()
-@hydra.main(version_base=None, config_path="configs", config_name="config")
-def main(cfg):
+def main():
+    _clean_args_for_hydra()
+    _hydra_main()
+
+
+def _clean_args_for_hydra():
+    if "--" in sys.argv:
+        sys.argv = [sys.argv[0]] + sys.argv[sys.argv.index("--") + 1 :]
+    else:
+        sys.argv = [sys.argv[0]]
+
+
+@hydra.main(version_base=None, config_path=CONFIG_DIR, config_name="config")
+def _hydra_main(cfg):
     init_cfg(cfg)
-    print(cfg)
     set_seed(cfg.seed)
-    # extract_residuals.remote(cfg)
+
+    from omegaconf import OmegaConf
+
+    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+
+    print(f"Running with config:\n{json.dumps(cfg_dict, indent=4)}")
+
+    extract_residuals.remote(cfg_dict)
 
 
 def generate_and_log(model: HookedTransformer, prompt: str):
@@ -124,10 +154,10 @@ def generate_and_log(model: HookedTransformer, prompt: str):
         stop_at_eos=cfg.generation.stop_at_eos,
     )  # [batch=1, seq_len_total]
 
-    seq_len_total = out_tokens.shape[1]
+    # seq_len_total = out_tokens.shape[1]
 
     # add hook to each layer
-    hook_names = [f"blocks.{layer}.hook_resid_post" for layer in LAYERS]
+    hook_names = [f"blocks.{layer}.hook_resid_post" for layer in cfg.layers]
 
     with torch.inference_mode():
         _, cache = model.run_with_cache(
@@ -152,7 +182,7 @@ def generate_and_log(model: HookedTransformer, prompt: str):
     print(response)
 
     return {
-        "model_name": MODEL_NAME,
+        "model_name": cfg.model.name,
         "prompt": prompt,
         "response": response,
         "prompt_len": int(prompt_len),
@@ -164,6 +194,7 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
+
 
 if __name__ == "__main__":
     main()

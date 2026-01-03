@@ -3,6 +3,7 @@ from omegaconf import DictConfig, OmegaConf
 
 _CFG: Optional[Dict[str, Any]] = None
 
+
 def init_cfg(cfg: DictConfig | Dict[str, Any]) -> None:
     """
     Initialize global config exactly once.
@@ -16,6 +17,7 @@ def init_cfg(cfg: DictConfig | Dict[str, Any]) -> None:
         _CFG = OmegaConf.to_container(cfg, resolve=True)
     else:
         _CFG = cfg
+
 
 def cfg() -> Dict[str, Any]:
     if _CFG is None:

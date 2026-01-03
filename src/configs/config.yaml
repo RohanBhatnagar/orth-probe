@@ -1,5 +1,5 @@
 defaults:
-  - model: llama3
+  - model: qwq-32b
   - dataset: gsm8k
   - generation: default
 
@@ -41,5 +41,3 @@ layers:
   - 31
   - 32
   - 33
-
-output_dir: /data

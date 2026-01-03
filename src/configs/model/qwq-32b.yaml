@@ -1,0 +1,3 @@
+name: Qwen/QwQ-32B-Preview
+dtype: float16
+device: cuda
