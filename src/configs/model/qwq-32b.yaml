@@ -1,3 +1,6 @@
 name: Qwen/QwQ-32B-Preview
 dtype: float16
 device: cuda
+nblocks: 64
+defaults:
+  - generation: default

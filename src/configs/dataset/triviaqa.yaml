@@ -1,3 +1,5 @@
-max_new_tokens: 512
-temperature: 0.7
-stop_at_eos: true
+path: "mandarjoshi/trivia_qa"
+name: "rc.nocontext"
+split: "train"
+system_msg: "You are a helpful assistant. Answer the question with just the final answer, no reasoning or citations."
+answer_instruction: "Answer with only the final answer as a short phrase."

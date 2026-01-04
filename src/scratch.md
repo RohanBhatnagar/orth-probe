@@ -2,6 +2,8 @@
 
 Analyzes the update $\Delta r_t = r_t - r_{t-1}$ at layer $L$ to quantify latent computation.
 
+We should place hooks at hook_resid_pre, hook_resid_post at each transformer block. This is redundant, since hook_resid_pre is the same as hook_resid_post of the previous block, but it will make processing simpler, allowing us to process each layer alone.
+
 ---
 
 ### 1. Expansion Factor
@@ -10,7 +12,6 @@ $$Expansion = 1 - \frac{\| \text{proj}_{P_t}(\Delta r_t) \|^2}{\| \Delta r_t \|^
 * **High:** Adding new basis dimensions (Information injection).
 * **Low:** Refining existing representation (Redundancy).
 * *$P_t$: Span of past updates (windowed or moving average).*
-
 
 
 ### 2. Complexity
@@ -92,9 +93,9 @@ HookedTransformer(
       (hook_mlp_in): HookPoint()
       (hook_attn_out): HookPoint()
       (hook_mlp_out): HookPoint()
-      (hook_resid_pre): HookPoint()
-      (hook_resid_mid): HookPoint()
-      (hook_resid_post): HookPoint()
+      (hook_resid_pre): HookPoint() --> before entering block
+      (hook_resid_mid): HookPoint() --> after attn
+      (hook_resid_post): HookPoint() --> after MLP
     )
   )
   (ln_final): RMSNormPre(

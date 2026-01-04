@@ -36,77 +36,66 @@ def extract_residuals(cfg):
 
     cfg = OmegaConf.create(cfg)
 
-    print("Loading model...")
     model = HookedTransformer.from_pretrained(
         cfg.model.name,
         device=cfg.model.device,
         dtype=cfg.model.dtype,
     )
-    print(model)
-    return
 
-    datasets_to_process = {
-        "triviaqa": load_dataset(
-            "mandarjoshi/trivia_qa", "rc.nocontext", split="train"
-        ),
-        "gsm8k": load_dataset("openai/gsm8k", "main", split="train"),
-    }
+    dataset = load_dataset(cfg.dataset.path, cfg.dataset.name, split=cfg.dataset.split)
+    os.makedirs(f"/data/{cfg.model.name}", exist_ok=True)
 
-    for dataset_name, dataset in datasets_to_process.items():
-        print(f"Processing {dataset_name}...")
-        os.makedirs(f"/data/{cfg.model.name}", exist_ok=True)
-        os.makedirs(f"/data/{cfg.model.name}/{dataset_name}", exist_ok=True)
+    dataset_alias = cfg.dataset.path.split("/")[-1]
+    os.makedirs(f"/data/{cfg.model.name}/{dataset_alias}", exist_ok=True)
 
-        indices = np.random.choice(len(dataset), cfg.num_samples, replace=False)
-        samples = dataset.select(indices)
+    print(f"Processing {dataset_alias}...")
 
-        output_path = f"/data/{cfg.model.name}/{dataset_name}/hidden_states.h5"
+    indices = np.random.choice(len(dataset), cfg.num_samples, replace=False)
+    samples = dataset.select(indices)
 
-        with h5py.File(output_path, "w") as f:
-            for i, sample in enumerate(tqdm(samples)):
-                if dataset_name == "triviaqa":
-                    system_msg = "You are a helpful assistant. Answer the question with just the final answer, no reasoning or citations."
-                    answer_instruction = (
-                        "Answer with only the final answer as a short phrase."
-                    )
-                elif dataset_name == "gsm8k":
-                    system_msg = "You are a helpful assistant. Solve the math problem step by step and then give the final answer."
-                    answer_instruction = "Show your reasoning, then clearly state the final answer on its own line."
+    output_path = f"/data/{cfg.model.name}/{dataset_alias}/residuals.h5"
 
-                # prompt = build_chat_prompt(sample["question"], system_msg, answer_instruction)
-                prompt = (
-                    system_msg
-                    + "\n\n"
-                    + sample["question"]
-                    + "\n\n"
-                    + answer_instruction
-                )
+    with h5py.File(output_path, "w") as f:
+        for i, sample in enumerate(tqdm(samples)):
+            system_msg = cfg.dataset.system_msg
+            answer_instruction = cfg.dataset.answer_instruction
+            prompt = (
+                system_msg + "\n\n" + sample["question"] + "\n\n" + answer_instruction
+            )
 
-                residual_info = generate_and_log(model, prompt)
+            residual_info = generate_and_log(model, prompt)
 
-                sample_group = f.create_group(f"sample_{i}")
+            sample_group = f.create_group(f"sample_{i}")
 
-                sample_group.attrs["prompt"] = str(residual_info["prompt"])
-                sample_group.attrs["response"] = residual_info["response"]
-                sample_group.attrs["answer"] = str(sample["answer"])
-                sample_group.attrs["prompt_len"] = residual_info["prompt_len"]
-                sample_group.attrs["model_name"] = residual_info["model_name"]
+            sample_group.attrs["prompt"] = str(residual_info["prompt"])
+            sample_group.attrs["response"] = residual_info["response"]
+            sample_group.attrs["answer"] = str(sample["answer"])
+            sample_group.attrs["prompt_len"] = residual_info["prompt_len"]
+            sample_group.attrs["model_name"] = residual_info["model_name"]
 
-                for layer, residuals in residual_info["resids"].items():
-                    if residuals is not None:
+            for layer, residuals_dict in residual_info["resids"].items():
+                if residuals_dict is not None:
+                    if "pre" in residuals_dict:
                         sample_group.create_dataset(
-                            f"layer_{layer}",
-                            data=residuals,
+                            f"layer_{layer}_pre",
+                            data=residuals_dict["pre"],
+                            compression="gzip",
+                            compression_opts=4,
+                        )
+                    if "post" in residuals_dict:
+                        sample_group.create_dataset(
+                            f"layer_{layer}_post",
+                            data=residuals_dict["post"],
                             compression="gzip",
                             compression_opts=4,
                         )
 
-                del residual_info
-                if i % 5 == 0:
-                    gc.collect()
-                    torch.cuda.empty_cache()
+            del residual_info
+            if i % 5 == 0:
+                gc.collect()
+                torch.cuda.empty_cache()
 
-        print(f"Finished processing {dataset_name}. Saved to {output_path}")
+    print(f"Finished processing {dataset_alias}. Saved to {output_path}")
 
 
 @app.local_entrypoint()
@@ -149,15 +138,15 @@ def generate_and_log(model: HookedTransformer, prompt: str):
 
     out_tokens = model.generate(
         input=tokens,
-        max_new_tokens=cfg.generation.max_new_tokens,
-        temperature=cfg.generation.temperature,
-        stop_at_eos=cfg.generation.stop_at_eos,
+        max_new_tokens=cfg.model.generation.max_new_tokens,
+        temperature=cfg.model.generation.temperature,
+        stop_at_eos=cfg.model.generation.stop_at_eos,
     )  # [batch=1, seq_len_total]
 
-    # seq_len_total = out_tokens.shape[1]
-
-    # add hook to each layer
-    hook_names = [f"blocks.{layer}.hook_resid_post" for layer in cfg.layers]
+    hook_names = []
+    for layer in range(len(model.blocks)):
+        hook_names.append(f"blocks.{layer}.hook_resid_pre")
+        hook_names.append(f"blocks.{layer}.hook_resid_post")
 
     with torch.inference_mode():
         _, cache = model.run_with_cache(
@@ -166,17 +155,33 @@ def generate_and_log(model: HookedTransformer, prompt: str):
             names_filter=hook_names,
         )
 
-    resids = {}
-    for layer in range(len(cache.keys())):
-        resid = cache[f"blocks.{layer}.hook_resid_post"]  # [1, seq_len_total, d_model]
-        arr = (
-            resid[0]  # [seq_len_total, d_model]
+    residuals = {}
+    for layer in range(len(model.blocks)):
+        residuals[layer] = {}
+
+        residual_pre = cache[
+            f"blocks.{layer}.hook_resid_pre"
+        ]  # [1, seq_len_total, d_model]
+        arr_pre = (
+            residual_pre[0]  # [seq_len_total, d_model]
             .detach()
             .cpu()
             .to(torch.float16)
             .numpy()
         )
-        resids[layer] = arr
+        residuals[layer]["pre"] = arr_pre
+
+        residual_post = cache[
+            f"blocks.{layer}.hook_resid_post"
+        ]  # [1, seq_len_total, d_model]
+        arr_post = (
+            residual_post[0]  # [seq_len_total, d_model]
+            .detach()
+            .cpu()
+            .to(torch.float16)
+            .numpy()
+        )
+        residuals[layer]["post"] = arr_post
 
     response = model.to_string(out_tokens[:, prompt_len:])[0]
     print(response)
@@ -186,7 +191,7 @@ def generate_and_log(model: HookedTransformer, prompt: str):
         "prompt": prompt,
         "response": response,
         "prompt_len": int(prompt_len),
-        "resids": resids,  # layer mapped to residual
+        "resids": residuals,  # layer mapped to residual
     }
 
 
