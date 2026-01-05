@@ -1,0 +1,6 @@
+defaults:
+  - model: qwq-32b
+  - dataset: gsm8k
+
+seed: 42
+history_window: 5
