@@ -111,7 +111,9 @@ def _clean_args_for_hydra():
         sys.argv = [sys.argv[0]]
 
 
-@hydra.main(version_base=None, config_path=CONFIG_DIR, config_name="extract_resid_config")
+@hydra.main(
+    version_base=None, config_path=CONFIG_DIR, config_name="extract_resid_config"
+)
 def _hydra_main(cfg):
     init_cfg(cfg)
     set_seed(cfg.seed)
